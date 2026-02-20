@@ -47,7 +47,7 @@ mcp = FastMCP(name="web-scraper")
 # ---------------------------------------------------------------------------
 # Helper: launch a headless browser, navigate to a URL, return parsed HTML
 # ---------------------------------------------------------------------------
-async def get_page(url: str, wait_time: int = 3) -> BeautifulSoup:
+async def get_page(url: str, wait_time: int = 5) -> BeautifulSoup:
     """
     Launch headless Chromium, navigate to `url`, wait for JS to render,
     and return a BeautifulSoup object of the fully-rendered page.
@@ -79,18 +79,18 @@ async def get_page(url: str, wait_time: int = 3) -> BeautifulSoup:
         )
         page = await context.new_page()
 
-        # Try "networkidle" first (waits until no requests for 500ms).
-        # Heavy sites (Amazon, etc.) never go idle due to analytics/ads,
-        # so we fall back to "load" which just waits for the load event.
-        try:
-            await page.goto(url, wait_until="networkidle", timeout=15000)
-        except Exception:
-            logger.info(f"networkidle timed out for {url}, falling back to load")
-            await page.goto(url, wait_until="load", timeout=30000)
+        # Use "domcontentloaded" first (fast, works on all sites), then
+        # wait for the page to settle. Heavy SPAs like Amazon never reach
+        # "networkidle" because of analytics/ads firing continuously.
+        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
-        # Extra wait for JS rendering (SPAs, lazy-loaded content).
-        if wait_time > 0:
-            await page.wait_for_timeout(wait_time * 1000)
+        # Wait for JS frameworks to render content. SPAs (React, Angular)
+        # need time after the initial HTML loads to fetch data and paint.
+        await page.wait_for_timeout(wait_time * 1000)
+
+        # Scroll down to trigger lazy-loaded content, then wait again.
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        await page.wait_for_timeout(2000)
 
         # page.content() returns the *rendered* HTML — after JS has run.
         html = await page.content()
@@ -107,7 +107,7 @@ async def get_page(url: str, wait_time: int = 3) -> BeautifulSoup:
 # Tool 1: scrape_url — fetch a page and return clean Markdown content
 # ---------------------------------------------------------------------------
 @mcp.tool()
-async def scrape_url(url: str, wait_time: int = 3) -> str:
+async def scrape_url(url: str, wait_time: int = 5) -> str:
     """Scrape a webpage and return its main content as clean Markdown.
 
     Launches a headless browser to fully render the page (including JS),
@@ -189,6 +189,76 @@ async def extract_links(url: str, same_domain_only: bool = False) -> str:
 
     header = f"Found {len(links)} links on {url}:\n\n"
     return header + "\n".join(links)
+
+
+# ---------------------------------------------------------------------------
+# Tool 3: search_text — find a word/phrase on a page and return matching links
+# ---------------------------------------------------------------------------
+@mcp.tool()
+async def search_text(url: str, query: str) -> str:
+    """Search for a word or phrase on a webpage.
+
+    Finds all occurrences of the search term in the page text. For each match,
+    returns the surrounding context and any associated link (URL). Useful for
+    finding job listings, product names, or any text on a page.
+
+    Args:
+        url: The full URL to search.
+        query: The word or phrase to search for (case-insensitive).
+    """
+    soup = await get_page(url)
+
+    # Remove non-content tags.
+    for tag in soup.find_all(["script", "style", "noscript"]):
+        tag.decompose()
+
+    query_lower = query.lower()
+    results = []
+    seen_urls = set()
+
+    # Search all text-containing elements for the query.
+    for element in soup.find_all(string=lambda text: text and query_lower in text.lower()):
+        parent = element.parent
+        if not parent:
+            continue
+
+        # Get the text of the containing block element for context.
+        # Walk up to find a meaningful parent (not just a <span> or <b>).
+        context_el = parent
+        for _ in range(5):
+            if context_el.parent and context_el.name in (
+                "span", "b", "i", "em", "strong", "small", "mark"
+            ):
+                context_el = context_el.parent
+            else:
+                break
+
+        context_text = context_el.get_text(strip=True)[:200]
+
+        # Find the closest <a> link — either the parent itself or a nearby one.
+        link_tag = parent.find_parent("a", href=True) or context_el.find("a", href=True)
+        link_url = None
+        if link_tag and link_tag.get("href"):
+            link_url = urljoin(url, link_tag["href"])
+            if not link_url.startswith(("http://", "https://")):
+                link_url = None
+
+        # Deduplicate by URL (or by context text if no URL).
+        dedup_key = link_url or context_text
+        if dedup_key in seen_urls:
+            continue
+        seen_urls.add(dedup_key)
+
+        if link_url:
+            results.append(f"- **{context_text}**\n  Link: {link_url}")
+        else:
+            results.append(f"- {context_text}")
+
+    if not results:
+        return f'Not found: "{query}" does not appear on {url}'
+
+    header = f'Found {len(results)} matches for "{query}" on {url}:\n\n'
+    return header + "\n\n".join(results)
 
 
 # ---------------------------------------------------------------------------
