@@ -46,7 +46,7 @@ mcp = FastMCP(name="web-scraper")
 
 # ---------------------------------------------------------------------------
 # Helper: launch a headless browser, navigate to a URL, return parsed HTML
-# ---------------------------------------------------------------------------
+
 async def get_page(url: str, wait_time: int = 5) -> BeautifulSoup:
     """
     Launch headless Chromium, navigate to `url`, wait for JS to render,
