@@ -1,6 +1,11 @@
 # MCP Web Scraper Server (Playwright)
 
-A beginner-friendly MCP server that gives Claude Desktop the ability to scrape web pages, extract links, and query elements — all powered by a headless browser.
+A  MCP server that gives user the ability to scrape web pages, extract links, and query elements — all powered by a headless browser.
+
+<img width="1470" height="956" alt="image" src="https://github.com/user-attachments/assets/fc7f3baf-525d-46fb-9ec3-5acc4f14eae5" />
+<img width="1470" height="956" alt="image" src="https://github.com/user-attachments/assets/5a57c66d-c80b-41e4-8806-f49db3c01d6d" />
+
+
 
 ## Prerequisites
 
